@@ -1,3 +1,2 @@
-# hello-world
-I'm learning GitHub
-following instructions at <a href="https://guides.github.com/activities/hello-world/">this address </a>
+# Twitter bot that checks new results for PubMed search
+This project provides code which can be run o a server to tweet any new results for a specific PubMed search.
