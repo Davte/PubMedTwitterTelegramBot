@@ -1,7 +1,5 @@
 #Secrets
 secrets.py
-#Log
-*.log
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
