@@ -11,7 +11,7 @@ import logging
 
 # Third party modules
 import tweepy
-from davteutil.utilities import (
+from davtelepot.utilities import (
     async_get, make_inline_keyboard, sleep_until
 )
 
