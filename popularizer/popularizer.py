@@ -10,6 +10,7 @@ import datetime
 import logging
 
 # Third party modules
+import bs4
 import tweepy
 from davtelepot.utilities import (
     async_get, make_inline_keyboard, sleep_until
@@ -35,76 +36,66 @@ class TwitterAPI(object):
         return api
 
 
-class PubMedArticle():
+class PubMedArticle:
     """PubMed Article."""
 
-    def __init__(self, div, hash_tag="#IgG4RD"):
+    def __init__(self, title, all_authors, journal, pmid, hash_tag="#IgG4RD"):
         """Get article object."""
-        self._div = div
-        self._hash_tag = hash_tag
-
-    @property
-    def div(self):
-        """Get HTML-parsed div object."""
-        return self._div
-
-    @property
-    def hash_tag(self):
-        """Get hashtag."""
-        return self._hash_tag
-
-    @property
-    def title(self):
-        """Get title from `self.div`."""
-        title = self.div.find("p", {"class": "title"}).text
         # <sup> and <sub> are super- and subscripts
         for spam in ["<sub>", "</sub>", "<sup>", "</sup>"]:
             title = title.replace(spam, '')
-        return title
+        self._title = title
+        self._all_authors = all_authors
+        self._journal = journal
+        self._pmid = pmid
+        self._hash_tag = hash_tag
+
+    @property
+    def title(self):
+        return self._title
+
+    @property
+    def all_authors(self):
+        return self._all_authors
+
+    @property
+    def journal_string(self):
+        return self._journal
 
     @property
     def pmid(self):
-        """Return article PubMed identification number."""
-        return self.div.find(
-            "p",
-            {"class": "title"}
-        ).a["href"].replace("/pubmed", "").strip('/')
+        return self._pmid
+
+    @property
+    def hash_tag(self):
+        return self._hash_tag
 
     @property
     def link(self):
         """Return link to this PubMed article."""
-        return "pmid.us/{s.pmid}".format(
-            s=self
-        )
+        return f"pmid.us/{self.pmid}"
 
     @property
     def journal(self):
         """Return journal name."""
-        journal = self.div.find("span", {"class": "jrnl"})
-        if journal:
-            return journal.attrs['title']
-        return None
+        return self._journal
 
     @property
     def telegram_text(self):
         """Make text to be sent via Telegram."""
         return (
-            "{s.hash_tag}\n"
-            "<b>{s.title}</b>\n"
-            "<i>{au}</i>"
-            "\n{s.journal}"
-        ).format(
-            s=self,
-            au=self.div.find("div", {"class": "supp"}).p.text
+            f"{self.hash_tag}\n"
+            f"<b>{self.title}</b>\n"
+            f"<i>{self.all_authors}</i>"
+            f"\n{self.journal}"
         )
 
     @property
-    def authors(self):
+    def few_authors(self):
         """Return the list of authors, last name first."""
-        authors_text = self.div.find("div", {"class": "supp"}).p.text
         authors_list = [
             x
-            for x in authors_text.replace(",", "").split()
+            for x in self.all_authors.replace(",", "").split()
             if x != x.upper()
         ]
         authors_list = [authors_list[-1]] + authors_list[:-1]
@@ -115,7 +106,7 @@ class PubMedArticle():
         """Get text to be tweeted."""
         hash_tag = self.hash_tag
         title = self.title
-        authors = self.authors
+        authors = self.few_authors
         link = self.link
         title = title.split()[::-1]
         authors = authors[::-1]
@@ -220,12 +211,11 @@ async def handle_news(api, bot, difference, telegram_addressees, admins,
                     "Tweet was sent\n{t}".format(t=tweet)
                 )
                 with bot.db as db:
-                    db['tweets'].upsert(
+                    db['tweets'].insert(
                         dict(
                             tweet=tweet,
                             pmid=article.pmid
-                        ),
-                        ['tweet']
+                        )
                     )
                 logging.info(
                     "Tweet was stored in bot database."
@@ -250,26 +240,26 @@ async def handle_news(api, bot, difference, telegram_addressees, admins,
                 await asyncio.sleep(2+tries)
                 tries += 1
         await asyncio.sleep(cooldown)
-    for admin in admins:
-        try:
-            await bot.send_message(
-                chat_id=admin,
-                text="No news found on PubMed.",
-                parse_mode=None,
-                disable_notification=True
-            )
-        except Exception as e:
-            tries += 1
-            logging.error(e, exc_info=True)
-            await asyncio.sleep(10)
+    # for admin in admins:
+    #     try:
+    #         await bot.send_message(
+    #             chat_id=admin,
+    #             text="No news found on PubMed.",
+    #             parse_mode=None,
+    #             disable_notification=True
+    #         )
+    #     except Exception as e:
+    #         tries += 1
+    #         logging.error(e, exc_info=True)
+    #         await asyncio.sleep(10)
     return
 
 
 async def monitor_pubmed(interval=60*60, bot=None, pub_med_search_url='',
                          C_KEY=None, C_SECRET=None,
                          A_TOKEN=None, A_TOKEN_SECRET=None,
-                         telegram_addressees=[],
-                         admins=[],
+                         telegram_addressees=None,
+                         admins=None,
                          cooldown_between_twitter_updates=60*60/100):
     """Every `interval` seconds check for news.
 
@@ -285,6 +275,10 @@ async def monitor_pubmed(interval=60*60, bot=None, pub_med_search_url='',
     `admins` [list]: list of telegram_ids to be notified if no news is found
     `cooldown_between_twitter_updates` [int]: seconds to wait between updates
     """
+    if admins is None:
+        admins = []
+    if telegram_addressees is None:
+        telegram_addressees = []
     if bot is None:
         raise Exception("Please provide a telepot Bot object.")
     if len(pub_med_search_url) == 0:
@@ -299,7 +293,7 @@ async def monitor_pubmed(interval=60*60, bot=None, pub_med_search_url='',
                     last_check_record['when']
                     + datetime.timedelta(seconds=interval)
                 )
-            while bot.maintenance:
+            while bot.under_maintenance:
                 await asyncio.sleep(5)
             update_datetime = datetime.datetime.now()
             logging.info("... checking pubmed for new results ...")
@@ -317,22 +311,19 @@ async def monitor_pubmed(interval=60*60, bot=None, pub_med_search_url='',
                 )
                 await asyncio.sleep(60*5)
                 continue
-            news = set(
-                PubMedArticle(x)
-                for x in bs4_parsed_web_page.findAll(
-                    "div",
-                    {"class": "rslt"}
-                )
-                if x
-            )
+            news = set(get_articles_from_page(
+                bs4_parsed_web_page=bs4_parsed_web_page
+            ))
             # Ignore articles already tweeted
-            # TODO: identify articles by pmid, not by `tweet`
-            with bot.db as db:
-                difference = [
-                    result
-                    for result in news
-                    if not db['tweets'].find_one(tweet=result.tweet)
-                ]
+            already_tweeted = [
+                record['pmid']
+                for record in bot.db['tweets'].find()
+            ]
+            difference = [
+                result
+                for result in news
+                if result.pmid not in already_tweeted
+            ]
             if len(difference) == 0:
                 logging.info("Nothing new on PubMed...")
             await handle_news(
@@ -354,3 +345,35 @@ async def monitor_pubmed(interval=60*60, bot=None, pub_med_search_url='',
     except Exception as e:
         logging.error(e, exc_info=True)
     return
+
+
+async def update_pmid(bot):
+    """Update `tweets` table.
+
+    Calculate `pmid` field basing on `tweet`.
+    """
+    for record in bot.db['tweets'].find(pmid=None):
+        logging.info(
+            f'tweet #{record["id"]} pmid: None -> {int(record["tweet"][-8:])}'
+        )
+        bot.db['tweets'].update(
+            dict(
+                pmid=int(record['tweet'][-8:]),
+                id=record['id']
+            ),
+            ['id']
+        )
+        await asyncio.sleep(0.5)
+    return
+
+
+def get_articles_from_page(bs4_parsed_web_page: bs4.BeautifulSoup):
+    for article in bs4_parsed_web_page.findAll(
+            "article",
+            {"class": "full-docsum"}):
+        article = PubMedArticle(
+            title=article.find('a', {'class': 'docsum-title'}).text.strip(),
+            all_authors=article.find('span', {'class': 'full-authors'}).text.strip(),
+            journal=article.find('span', {'class': 'short-journal-citation'}).text.strip(),
+            pmid=article.find('span', {'class': 'docsum-pmid'}).text.strip())
+        yield article
