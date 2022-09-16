@@ -10,7 +10,7 @@ dataset==1.1.2
 davtelepot>=1.5.4
 idna==2.8
 idna-ssl==1.1.0
-Mako==1.0.10
+Mako==1.2.2
 MarkupSafe==1.1.1
 multidict==4.5.2
 oauthlib==3.0.1
